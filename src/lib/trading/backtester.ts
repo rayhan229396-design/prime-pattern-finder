@@ -71,7 +71,7 @@ export function backtest(config: BacktestConfig): BacktestResult {
       candles: history,
       sourceName: config.sourceName,
       placeholder: config.placeholder,
-      minScore: config.minScore,
+      ...(config.minScore !== undefined ? { minScore: config.minScore } : {}),
     });
     if (!res.ok || res.signal.direction === "WAIT") continue;
 
