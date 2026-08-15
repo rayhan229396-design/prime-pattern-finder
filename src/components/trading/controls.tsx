@@ -125,7 +125,7 @@ export function BrokerSelector({
     );
   }
   return (
-    <Select value={value ?? undefined} onValueChange={onChange}>
+    <Select {...(value ? { value } : {})} onValueChange={onChange}>
       <SelectTrigger className="w-[190px] bg-elevated text-sm">
         <SelectValue placeholder="Select Broker" />
       </SelectTrigger>
