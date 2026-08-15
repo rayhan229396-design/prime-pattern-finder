@@ -10,8 +10,12 @@ export function BangladeshClock({ now }: { now: number }) {
       <div className="label-xs flex items-center justify-end gap-1">
         <Clock className="size-3" /> Bangladesh time
       </div>
-      <div className="tabular text-lg leading-6 font-semibold">{dhakaClock(now)}</div>
-      <div className="tabular text-[11px] text-muted-foreground">{dhakaDate(now)} · BST</div>
+      <div className="tabular text-lg leading-6 font-semibold">
+        {now === 0 ? "--:--:--" : dhakaClock(now)}
+      </div>
+      <div className="tabular text-[11px] text-muted-foreground">
+        {now === 0 ? "BST" : `${dhakaDate(now)} · BST`}
+      </div>
     </div>
   );
 }
@@ -56,7 +60,7 @@ export function DataSourceStatusCard({ status, now }: { status: Status; now: num
         </div>
         <div className="flex justify-between">
           <dt className="text-muted-foreground">Freshness</dt>
-          <dd className="tabular">{freshnessLabel(status.lastUpdate, now)}</dd>
+          <dd className="tabular">{now === 0 ? "—" : freshnessLabel(status.lastUpdate, now)}</dd>
         </div>
       </dl>
       {status.message && (

@@ -48,7 +48,8 @@ export function useTerminal() {
   const [symbol, setSymbol] = useState("EUR/USD");
   const [timeframe, setTimeframe] = useState<TimeframeId>("5m");
   const [brokerId, setBrokerId] = useState<string | null>(null);
-  const [now, setNow] = useState(() => Date.now());
+  // Starts at 0 so SSR and first client render match; set on mount.
+  const [now, setNow] = useState(0);
   const [candles, setCandles] = useState<Candle[]>([]);
   const [signal, setSignal] = useState<Signal | null>(null);
   const [signalError, setSignalError] = useState<string | null>(null);
@@ -88,6 +89,7 @@ export function useTerminal() {
 
   /* Clock — 1s tick, drives Bangladesh time and the candle countdown. */
   useEffect(() => {
+    setNow(Date.now());
     const id = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(id);
   }, []);
@@ -171,6 +173,7 @@ export function useTerminal() {
   /* Candle close -> analyze closed candle -> signal for the NEXT candle. */
   useEffect(() => {
     if (!dataAvailable) return;
+    if (now === 0) return;
     const currentOpen = alignToCandle(now, timeframe);
     if (currentOpen > lastClosedRef.current) {
       lastClosedRef.current = currentOpen;
@@ -229,7 +232,7 @@ export function useTerminal() {
     return () => clearInterval(id);
   }, [runScan]);
 
-  const countdown = secondsToClose(now, timeframe);
+  const countdown = now === 0 ? 0 : secondsToClose(now, timeframe);
   const marketOpen = forexMarketOpen(now);
 
   return {

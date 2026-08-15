@@ -33,24 +33,24 @@ export function CandleChart({
     void (async () => {
       const { createChart, CandlestickSeries, ColorType } = await import("lightweight-charts");
       if (disposed || !containerRef.current) return;
-      const styles = getComputedStyle(document.documentElement);
-      const token = (name: string, fallback: string) =>
-        styles.getPropertyValue(name).trim() || fallback;
+      // lightweight-charts cannot parse oklch(), so chart colors are hex
+      // mirrors of the design tokens.
+      const token = (_name: string, fallback: string) => fallback;
 
       const chart = createChart(containerRef.current, {
         layout: {
           background: { type: ColorType.Solid, color: "transparent" },
-          textColor: token("--muted-foreground", "#9aa4b2"),
+          textColor: token("--muted-foreground", "#94a0b0"),
           fontFamily: "JetBrains Mono, monospace",
           attributionLogo: false,
         },
         grid: {
-          vertLines: { color: token("--grid", "#232a36") },
-          horzLines: { color: token("--grid", "#232a36") },
+          vertLines: { color: token("--grid", "#242b37") },
+          horzLines: { color: token("--grid", "#242b37") },
         },
-        rightPriceScale: { borderColor: token("--border", "#2b3341") },
+        rightPriceScale: { borderColor: token("--border", "#2c3441") },
         timeScale: {
-          borderColor: token("--border", "#2b3341"),
+          borderColor: token("--border", "#2c3441"),
           timeVisible: true,
           secondsVisible: false,
         },
@@ -60,12 +60,12 @@ export function CandleChart({
       });
 
       const series = chart.addSeries(CandlestickSeries, {
-        upColor: token("--bull", "#26a69a"),
-        downColor: token("--bear", "#ef5350"),
-        borderUpColor: token("--bull", "#26a69a"),
-        borderDownColor: token("--bear", "#ef5350"),
-        wickUpColor: token("--bull", "#26a69a"),
-        wickDownColor: token("--bear", "#ef5350"),
+        upColor: token("--bull", "#3ddc97"),
+        downColor: token("--bear", "#f2555a"),
+        borderUpColor: token("--bull", "#3ddc97"),
+        borderDownColor: token("--bear", "#f2555a"),
+        wickUpColor: token("--bull", "#3ddc97"),
+        wickDownColor: token("--bear", "#f2555a"),
         priceFormat: { type: "price", precision: digits, minMove: 1 / 10 ** digits },
       });
 
