@@ -71,7 +71,7 @@ export function CandleChart({
 
       chartRef.current = chart as unknown as typeof chartRef.current;
       seriesRef.current = series as unknown as typeof seriesRef.current;
-      series.setData(toSeries(dataRef.current));
+      series.setData(toSeries(dataRef.current) as never);
       chart.timeScale().fitContent();
     })();
 
@@ -101,7 +101,7 @@ export function CandleChart({
 
 function toSeries(candles: Candle[]) {
   return candles.slice(-180).map((c) => ({
-    time: (Math.floor(c.time / 1000) + DHAKA_OFFSET_SECONDS) as unknown as number,
+    time: Math.floor(c.time / 1000) + DHAKA_OFFSET_SECONDS,
     open: c.open,
     high: c.high,
     low: c.low,
