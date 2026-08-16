@@ -251,35 +251,56 @@ export function useTerminal() {
     });
   }, [candles, symbol, timeframe]);
 
-  /* Market scanner */
+  /* Market scanner — rotates through a small batch each cycle to stay inside
+     the provider's request budget; results accumulate and refresh over time. */
+  const scanCursor = useRef(0);
   const runScan = useCallback(async () => {
     if (!dataAvailable) {
       setOpportunities([]);
       return;
     }
     setScanning(true);
-    const targets = ASSETS.flatMap((a) => SCAN_TIMEFRAMES.map((tf) => ({ symbol: a.symbol, timeframe: tf })));
+    const all = ASSETS.flatMap((a) => SCAN_TIMEFRAMES.map((tf) => ({ symbol: a.symbol, timeframe: tf })));
+    const start = scanCursor.current % all.length;
+    const targets = Array.from({ length: SCAN_BATCH }, (_, i) => all[(start + i) % all.length]!);
+    scanCursor.current = start + SCAN_BATCH;
+
     const { signals } = await scanMarkets(
       targets,
-      async (sym, tf) => ({ candles: generatePlaceholderSeries(sym, tf, HISTORY_LIMIT) }),
+      async (sym, tf) => {
+        const res = await getMarketSeries({ data: { symbol: sym, timeframe: tf, limit: 200 } });
+        return res.ok ? { candles: res.candles } : null;
+      },
       {
         market,
         sourceName: status.name,
-        placeholder: status.quality === "placeholder",
+        placeholder: false,
         threshold,
         calibration: DEFAULT_MODEL,
-        throttleMs: 0,
+        throttleMs: 250,
       },
     );
-    setOpportunities(signals.slice(0, 12));
+    setOpportunities((prev) => {
+      const merged = [
+        ...signals,
+        ...prev.filter(
+          (p) => !targets.some((t) => t.symbol === p.symbol && t.timeframe === p.timeframe),
+        ),
+      ];
+      return merged
+        .filter((s) => s.probability >= threshold)
+        .sort((a, b) => b.probability - a.probability)
+        .slice(0, 12);
+    });
     setScanning(false);
-  }, [dataAvailable, market, status.name, status.quality, threshold]);
+  }, [dataAvailable, market, status.name, threshold]);
 
   useEffect(() => {
     void runScan();
     const id = setInterval(() => void runScan(), 60_000);
     return () => clearInterval(id);
   }, [runScan]);
+
 
   const countdown = now === 0 ? 0 : secondsToClose(now, timeframe);
   const marketOpen = forexMarketOpen(now);
