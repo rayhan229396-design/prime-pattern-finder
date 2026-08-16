@@ -1,19 +1,42 @@
+import { getMarketSeries } from "../market-data.functions";
 import { placeholderProvider } from "./placeholder-provider";
-import type { BrokerAdapter, MarketDataProvider } from "./types";
+import { unavailableStatus } from "./types";
+import type { BrokerAdapter, MarketDataProvider, SeriesRequest, SeriesResponse } from "./types";
 
 /**
- * Provider registry.
- *
- * Real-market providers (Twelve Data etc.) are added in Phase 2 behind a
- * server-side API route so keys never reach the browser. Until an integration
- * exists and is verified, `implemented` stays false and the UI must not label
- * its output as live market data.
+ * Real-market provider: Twelve Data, reached through a server function so the
+ * API key never reaches the browser.
  */
-export const REAL_PROVIDERS: MarketDataProvider[] = [placeholderProvider];
+export const twelveDataProvider: MarketDataProvider = {
+  id: "twelve-data",
+  name: "Twelve Data (real market)",
+  market: "REAL",
+  implemented: true,
+  streamsRealtime: false,
+  supports: () => true,
+  async fetchSeries(req: SeriesRequest): Promise<SeriesResponse> {
+    try {
+      const res = await getMarketSeries({
+        data: { symbol: req.symbol, timeframe: req.timeframe, limit: req.limit },
+      });
+      if (!res.ok) return { ok: false, status: res.status, error: res.error ?? "Unavailable" };
+      return { ok: true, candles: res.candles, status: res.status };
+    } catch (err) {
+      const message = (err as Error).message;
+      return {
+        ok: false,
+        status: unavailableStatus("Twelve Data (real market)", message),
+        error: message,
+      };
+    }
+  },
+};
+
+export const REAL_PROVIDERS: MarketDataProvider[] = [twelveDataProvider, placeholderProvider];
 
 /**
- * OTC broker adapters (Phase 6). Intentionally EMPTY: no OTC broker feed has
- * been integrated or verified, so the UI shows "OTC data source unavailable"
+ * OTC broker adapters. Intentionally EMPTY: no OTC broker feed has been
+ * integrated or verified, so the UI shows "OTC data source unavailable"
  * rather than fabricating OTC prices. Add verified adapters here.
  */
 export const OTC_BROKERS: BrokerAdapter[] = [];
