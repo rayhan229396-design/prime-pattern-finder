@@ -66,13 +66,24 @@ export function useTerminal() {
 
   const otcAvailable = hasVerifiedOtcData();
   const realVerified = hasVerifiedRealData();
-  const usingPlaceholder = !realVerified;
+  const usingPlaceholder = false;
 
-  const dataAvailable = market === "REAL" ? true : otcAvailable;
+  const [feedStatus, setFeedStatus] = useState<DataSourceStatus>({
+    name: "Twelve Data (real market)",
+    connected: false,
+    quality: "delayed",
+    lastUpdate: null,
+    transport: "rest",
+    message: "Connecting to market data…",
+  });
+
+  const dataAvailable = market === "REAL" ? realVerified : otcAvailable;
   const unavailableReason =
     market === "OTC" && !otcAvailable
       ? "OTC data source unavailable — no verified broker feed is connected."
-      : null;
+      : market === "REAL" && !realVerified
+        ? "Real market data source unavailable."
+        : null;
 
   const status: DataSourceStatus = useMemo(() => {
     if (market === "OTC" && !otcAvailable) {
@@ -85,9 +96,8 @@ export function useTerminal() {
         message: "No verified OTC broker adapter registered.",
       };
     }
-    return placeholderStatus(now);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [market, otcAvailable, Math.floor(now / 1000)]);
+    return feedStatus;
+  }, [market, otcAvailable, feedStatus]);
 
   /* Clock — 1s tick, drives Bangladesh time and the candle countdown. */
   useEffect(() => {
@@ -96,39 +106,76 @@ export function useTerminal() {
     return () => clearInterval(id);
   }, []);
 
-  /* Load the series for the current selection and keep the forming candle live. */
+  /* Load the real series for the current selection and keep it refreshed. */
   useEffect(() => {
     if (!dataAvailable) {
       setCandles([]);
       engineRef.current = null;
       return;
     }
-    const seed = generatePlaceholderSeries(symbol, timeframe, HISTORY_LIMIT);
-    const engine = new CandleEngine(timeframe, seed, HISTORY_LIMIT);
-    engineRef.current = engine;
-    lastClosedRef.current = alignToCandle(Date.now(), timeframe);
-    setCandles([...engine.getCandles()]);
+    let cancelled = false;
+
+    const load = async (seed: boolean) => {
+      try {
+        const res = await getMarketSeries({
+          data: { symbol, timeframe, limit: HISTORY_LIMIT },
+        });
+        if (cancelled) return;
+        setFeedStatus(res.status);
+        if (!res.ok || res.candles.length === 0) {
+          if (seed) {
+            engineRef.current = null;
+            setCandles([]);
+          }
+          setSignalError(res.error ?? "Market data unavailable.");
+          return;
+        }
+        const engine = new CandleEngine(timeframe, res.candles, HISTORY_LIMIT);
+        engineRef.current = engine;
+        lastClosedRef.current = alignToCandle(Date.now(), timeframe);
+        setCandles([...engine.getCandles()]);
+        setSignalError(null);
+      } catch (err) {
+        if (cancelled) return;
+        setSignalError((err as Error).message);
+      }
+    };
+
     setSignal(null);
-    setSignalError(null);
+    void load(true);
+    const id = setInterval(() => void load(false), SERIES_REFRESH_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
   }, [symbol, timeframe, market, dataAvailable]);
 
-  /* Placeholder tick feed: keeps the forming candle moving so the candle engine,
-     countdown and candle-close pipeline can be exercised during UI development. */
+  /* Live price polling keeps the forming candle moving between series refreshes. */
   useEffect(() => {
     if (!dataAvailable) return;
+    let cancelled = false;
     const digits = getAsset(symbol).digits;
-    const id = setInterval(() => {
-      const engine = engineRef.current;
-      if (!engine) return;
-      const current = engine.getCurrent();
-      if (!current) return;
-      const step = current.close * (getAsset(symbol).assetClass === "metal" ? 0.00012 : 0.00006);
-      const price = Number((current.close + (Math.random() - 0.5) * step * 2).toFixed(digits));
-      engine.addTick(price, Date.now());
-      setCandles([...engine.getCandles()]);
-    }, 1200);
-    return () => clearInterval(id);
+    const tick = async () => {
+      try {
+        const { price } = await getMarketPrice({ data: { symbol } });
+        if (cancelled || price == null) return;
+        const engine = engineRef.current;
+        if (!engine) return;
+        engine.addTick(Number(price.toFixed(digits)), Date.now());
+        setCandles([...engine.getCandles()]);
+        setFeedStatus((prev) => ({ ...prev, connected: true, quality: "live", lastUpdate: Date.now() }));
+      } catch {
+        /* transient provider error — the next poll retries */
+      }
+    };
+    void tick();
+    const id = setInterval(() => void tick(), PRICE_POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
   }, [symbol, timeframe, dataAvailable]);
+
 
   const runAnalysis = useCallback(
     (source: "manual" | "auto") => {
