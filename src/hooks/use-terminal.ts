@@ -2,10 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { CandleEngine, alignToCandle, secondsToClose } from "@/lib/trading/candle-engine";
 import { ASSETS, getAsset, getTimeframe } from "@/lib/trading/instruments";
-import {
-  generatePlaceholderSeries,
-  placeholderStatus,
-} from "@/lib/trading/providers/placeholder-provider";
+import { getMarketPrice, getMarketSeries } from "@/lib/trading/market-data.functions";
 import { OTC_BROKERS, hasVerifiedOtcData, hasVerifiedRealData } from "@/lib/trading/providers/registry";
 import { scanMarkets } from "@/lib/trading/scanner";
 import { analyze, evaluateSignal } from "@/lib/trading/signal-engine";
@@ -21,6 +18,11 @@ import type {
 
 const HISTORY_LIMIT = 320;
 const SCAN_TIMEFRAMES: TimeframeId[] = ["1m", "3m", "5m"];
+/** Free-tier provider limits: only a few targets per scan cycle. */
+const SCAN_BATCH = 3;
+const SERIES_REFRESH_MS = 20_000;
+const PRICE_POLL_MS = 8_000;
+
 
 export interface TerminalState {
   market: MarketType;
