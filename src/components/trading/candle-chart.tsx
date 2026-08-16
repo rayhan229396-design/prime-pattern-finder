@@ -55,6 +55,9 @@ export function CandleChart({
           secondsVisible: false,
         },
         crosshair: { mode: 0 },
+        // Explicit locale: relying on the environment default can throw on
+        // hosts with a non-standard LANG and blank the axis labels.
+        localization: { locale: "en-GB" },
         height,
         autoSize: true,
       });
