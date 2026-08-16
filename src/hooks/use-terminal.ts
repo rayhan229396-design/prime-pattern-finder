@@ -2,10 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { CandleEngine, alignToCandle, secondsToClose } from "@/lib/trading/candle-engine";
 import { ASSETS, getAsset, getTimeframe } from "@/lib/trading/instruments";
-import {
-  generatePlaceholderSeries,
-  placeholderStatus,
-} from "@/lib/trading/providers/placeholder-provider";
+import { getMarketPrice, getMarketSeries } from "@/lib/trading/market-data.functions";
 import { OTC_BROKERS, hasVerifiedOtcData, hasVerifiedRealData } from "@/lib/trading/providers/registry";
 import { scanMarkets } from "@/lib/trading/scanner";
 import { analyze, evaluateSignal } from "@/lib/trading/signal-engine";
@@ -21,6 +18,11 @@ import type {
 
 const HISTORY_LIMIT = 320;
 const SCAN_TIMEFRAMES: TimeframeId[] = ["1m", "3m", "5m"];
+/** Free-tier provider limits: only a few targets per scan cycle. */
+const SCAN_BATCH = 3;
+const SERIES_REFRESH_MS = 20_000;
+const PRICE_POLL_MS = 8_000;
+
 
 export interface TerminalState {
   market: MarketType;
@@ -64,13 +66,24 @@ export function useTerminal() {
 
   const otcAvailable = hasVerifiedOtcData();
   const realVerified = hasVerifiedRealData();
-  const usingPlaceholder = !realVerified;
+  const usingPlaceholder = false;
 
-  const dataAvailable = market === "REAL" ? true : otcAvailable;
+  const [feedStatus, setFeedStatus] = useState<DataSourceStatus>({
+    name: "Twelve Data (real market)",
+    connected: false,
+    quality: "delayed",
+    lastUpdate: null,
+    transport: "rest",
+    message: "Connecting to market data…",
+  });
+
+  const dataAvailable = market === "REAL" ? realVerified : otcAvailable;
   const unavailableReason =
     market === "OTC" && !otcAvailable
       ? "OTC data source unavailable — no verified broker feed is connected."
-      : null;
+      : market === "REAL" && !realVerified
+        ? "Real market data source unavailable."
+        : null;
 
   const status: DataSourceStatus = useMemo(() => {
     if (market === "OTC" && !otcAvailable) {
@@ -83,9 +96,8 @@ export function useTerminal() {
         message: "No verified OTC broker adapter registered.",
       };
     }
-    return placeholderStatus(now);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [market, otcAvailable, Math.floor(now / 1000)]);
+    return feedStatus;
+  }, [market, otcAvailable, feedStatus]);
 
   /* Clock — 1s tick, drives Bangladesh time and the candle countdown. */
   useEffect(() => {
@@ -94,39 +106,76 @@ export function useTerminal() {
     return () => clearInterval(id);
   }, []);
 
-  /* Load the series for the current selection and keep the forming candle live. */
+  /* Load the real series for the current selection and keep it refreshed. */
   useEffect(() => {
     if (!dataAvailable) {
       setCandles([]);
       engineRef.current = null;
       return;
     }
-    const seed = generatePlaceholderSeries(symbol, timeframe, HISTORY_LIMIT);
-    const engine = new CandleEngine(timeframe, seed, HISTORY_LIMIT);
-    engineRef.current = engine;
-    lastClosedRef.current = alignToCandle(Date.now(), timeframe);
-    setCandles([...engine.getCandles()]);
+    let cancelled = false;
+
+    const load = async (seed: boolean) => {
+      try {
+        const res = await getMarketSeries({
+          data: { symbol, timeframe, limit: HISTORY_LIMIT },
+        });
+        if (cancelled) return;
+        setFeedStatus(res.status);
+        if (!res.ok || res.candles.length === 0) {
+          if (seed) {
+            engineRef.current = null;
+            setCandles([]);
+          }
+          setSignalError(res.error ?? "Market data unavailable.");
+          return;
+        }
+        const engine = new CandleEngine(timeframe, res.candles, HISTORY_LIMIT);
+        engineRef.current = engine;
+        lastClosedRef.current = alignToCandle(Date.now(), timeframe);
+        setCandles([...engine.getCandles()]);
+        setSignalError(null);
+      } catch (err) {
+        if (cancelled) return;
+        setSignalError((err as Error).message);
+      }
+    };
+
     setSignal(null);
-    setSignalError(null);
+    void load(true);
+    const id = setInterval(() => void load(false), SERIES_REFRESH_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
   }, [symbol, timeframe, market, dataAvailable]);
 
-  /* Placeholder tick feed: keeps the forming candle moving so the candle engine,
-     countdown and candle-close pipeline can be exercised during UI development. */
+  /* Live price polling keeps the forming candle moving between series refreshes. */
   useEffect(() => {
     if (!dataAvailable) return;
+    let cancelled = false;
     const digits = getAsset(symbol).digits;
-    const id = setInterval(() => {
-      const engine = engineRef.current;
-      if (!engine) return;
-      const current = engine.getCurrent();
-      if (!current) return;
-      const step = current.close * (getAsset(symbol).assetClass === "metal" ? 0.00012 : 0.00006);
-      const price = Number((current.close + (Math.random() - 0.5) * step * 2).toFixed(digits));
-      engine.addTick(price, Date.now());
-      setCandles([...engine.getCandles()]);
-    }, 1200);
-    return () => clearInterval(id);
+    const tick = async () => {
+      try {
+        const { price } = await getMarketPrice({ data: { symbol } });
+        if (cancelled || price == null) return;
+        const engine = engineRef.current;
+        if (!engine) return;
+        engine.addTick(Number(price.toFixed(digits)), Date.now());
+        setCandles([...engine.getCandles()]);
+        setFeedStatus((prev) => ({ ...prev, connected: true, quality: "live", lastUpdate: Date.now() }));
+      } catch {
+        /* transient provider error — the next poll retries */
+      }
+    };
+    void tick();
+    const id = setInterval(() => void tick(), PRICE_POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
   }, [symbol, timeframe, dataAvailable]);
+
 
   const runAnalysis = useCallback(
     (source: "manual" | "auto") => {
@@ -202,35 +251,56 @@ export function useTerminal() {
     });
   }, [candles, symbol, timeframe]);
 
-  /* Market scanner */
+  /* Market scanner — rotates through a small batch each cycle to stay inside
+     the provider's request budget; results accumulate and refresh over time. */
+  const scanCursor = useRef(0);
   const runScan = useCallback(async () => {
     if (!dataAvailable) {
       setOpportunities([]);
       return;
     }
     setScanning(true);
-    const targets = ASSETS.flatMap((a) => SCAN_TIMEFRAMES.map((tf) => ({ symbol: a.symbol, timeframe: tf })));
+    const all = ASSETS.flatMap((a) => SCAN_TIMEFRAMES.map((tf) => ({ symbol: a.symbol, timeframe: tf })));
+    const start = scanCursor.current % all.length;
+    const targets = Array.from({ length: SCAN_BATCH }, (_, i) => all[(start + i) % all.length]!);
+    scanCursor.current = start + SCAN_BATCH;
+
     const { signals } = await scanMarkets(
       targets,
-      async (sym, tf) => ({ candles: generatePlaceholderSeries(sym, tf, HISTORY_LIMIT) }),
+      async (sym, tf) => {
+        const res = await getMarketSeries({ data: { symbol: sym, timeframe: tf, limit: 200 } });
+        return res.ok ? { candles: res.candles } : null;
+      },
       {
         market,
         sourceName: status.name,
-        placeholder: status.quality === "placeholder",
+        placeholder: false,
         threshold,
         calibration: DEFAULT_MODEL,
-        throttleMs: 0,
+        throttleMs: 250,
       },
     );
-    setOpportunities(signals.slice(0, 12));
+    setOpportunities((prev) => {
+      const merged = [
+        ...signals,
+        ...prev.filter(
+          (p) => !targets.some((t) => t.symbol === p.symbol && t.timeframe === p.timeframe),
+        ),
+      ];
+      return merged
+        .filter((s) => s.probability >= threshold)
+        .sort((a, b) => b.probability - a.probability)
+        .slice(0, 12);
+    });
     setScanning(false);
-  }, [dataAvailable, market, status.name, status.quality, threshold]);
+  }, [dataAvailable, market, status.name, threshold]);
 
   useEffect(() => {
     void runScan();
     const id = setInterval(() => void runScan(), 60_000);
     return () => clearInterval(id);
   }, [runScan]);
+
 
   const countdown = now === 0 ? 0 : secondsToClose(now, timeframe);
   const marketOpen = forexMarketOpen(now);
