@@ -1,122 +1,102 @@
-import { alignToCandle, aggregate } from "../candle-engine";
-import { getAsset } from "../instruments";
-import type { Candle, TimeframeId } from "../types";
+import { MarketDataProvider, Candle, MarketStatus } from '../types';
 
-/**
- * Twelve Data REST access. SERVER ONLY — the API key never reaches the browser.
- *
- * The free plan is rate limited (8 requests/minute), so every response is cached
- * in-process for a fraction of the candle duration and 3m series are derived by
- * aggregating 1m data instead of spending an extra request.
- */
+// Rate Limiter Configurations
+// 8 calls max per 60,000 ms (1 minute)
+const MAX_CALLS_PER_MINUTE = 8;
+const WINDOW_MS = 60 * 1000;
+let callTimestamps: number[] = [];
 
-const BASE = "https://api.twelvedata.com";
+// Cache to prevent repetitive API hits
+const cache = new Map<string, { timestamp: number; data: Candle[] }>();
+const CACHE_TTL_MS = 10 * 1000; // 10 seconds cache
 
-/** Twelve Data intervals we actually request. 3m is aggregated from 1min. */
-const INTERVAL: Record<TimeframeId, string> = { "1m": "1min", "3m": "1min", "5m": "5min" };
-
-interface CacheEntry<T> {
-  at: number;
-  value: T;
+function canMakeRequest(): boolean {
+  const now = Date.now();
+  // Clear calls older than 60 seconds
+  callTimestamps = callTimestamps.filter(t => now - t < WINDOW_MS);
+  return callTimestamps.length < MAX_CALLS_PER_MINUTE;
 }
 
-const seriesCache = new Map<string, CacheEntry<Candle[]>>();
-const priceCache = new Map<string, CacheEntry<number>>();
-
-const SERIES_TTL_MS = 20_000;
-const PRICE_TTL_MS = 6_000;
-
-function apiKey(): string {
-  const key = process.env["TWELVE_DATA_API_KEY"];
-  if (!key) throw new Error("TWELVE_DATA_API_KEY is not configured.");
-  return key;
+function trackRequest() {
+  callTimestamps.push(Date.now());
 }
 
-function parseUtc(datetime: string): number {
-  // Twelve Data returns "YYYY-MM-DD HH:mm:ss" (UTC when timezone=UTC is requested).
-  const iso = datetime.includes("T") ? datetime : datetime.replace(" ", "T");
-  return Date.parse(iso.endsWith("Z") ? iso : `${iso}Z`);
-}
+export class TwelveDataServerProvider implements MarketDataProvider {
+  private apiKey: string;
 
-async function request(path: string, params: Record<string, string>): Promise<unknown> {
-  const url = new URL(`${BASE}${path}`);
-  for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
-  url.searchParams.set("apikey", apiKey());
-  const res = await fetch(url.toString(), { headers: { accept: "application/json" } });
-  if (!res.ok) throw new Error(`Twelve Data HTTP ${res.status}`);
-  const json = (await res.json()) as Record<string, unknown>;
-  if (json["status"] === "error" || json["code"] === 429) {
-    throw new Error(String(json["message"] ?? "Twelve Data request rejected"));
-  }
-  return json;
-}
-
-/** Fetch a normalized, timeframe-aligned candle series. */
-export async function fetchSeries(
-  symbol: string,
-  timeframe: TimeframeId,
-  limit: number,
-): Promise<{ candles: Candle[]; cached: boolean }> {
-  const interval = INTERVAL[timeframe];
-  const need = timeframe === "3m" ? Math.min(limit * 3 + 3, 5000) : limit;
-  const key = `${symbol}:${interval}:${need}`;
-  const hit = seriesCache.get(key);
-  if (hit && Date.now() - hit.at < SERIES_TTL_MS) {
-    return { candles: shape(hit.value, timeframe, limit), cached: true };
+  constructor(apiKey?: string) {
+    this.apiKey = apiKey || process.env.TWELVE_DATA_API_KEY || '';
   }
 
-  const json = (await request("/time_series", {
-    symbol,
-    interval,
-    outputsize: String(need),
-    timezone: "UTC",
-    format: "JSON",
-  })) as { values?: Array<Record<string, string>> };
+  async getCandles(symbol: string, interval: string, outputsize: number = 30): Promise<Candle[]> {
+    if (!this.apiKey) {
+      throw new Error('TWELVE_DATA_API_KEY is not configured.');
+    }
 
-  const digits = getAsset(symbol).digits;
-  const rows = json.values ?? [];
-  const raw: Candle[] = rows
-    .map((v) => ({
-      time: parseUtc(v["datetime"] ?? ""),
-      open: round(Number(v["open"]), digits),
-      high: round(Number(v["high"]), digits),
-      low: round(Number(v["low"]), digits),
-      close: round(Number(v["close"]), digits),
-      ...(v["volume"] != null && v["volume"] !== "" ? { volume: Number(v["volume"]) } : {}),
-      closed: true,
-    }))
-    .filter((c) => Number.isFinite(c.time) && Number.isFinite(c.close))
-    .sort((a, b) => a.time - b.time);
+    const cacheKey = `${symbol}-${interval}-${outputsize}`;
+    const cached = cache.get(cacheKey);
+    const now = Date.now();
 
-  if (raw.length === 0) throw new Error(`No data returned for ${symbol} ${timeframe}`);
-  seriesCache.set(key, { at: Date.now(), value: raw });
-  return { candles: shape(raw, timeframe, limit), cached: false };
-}
+    // Return cached data if fresh (within 10 seconds)
+    if (cached && (now - cached.timestamp < CACHE_TTL_MS)) {
+      return cached.data;
+    }
 
-/** Aggregate to the requested timeframe and flag the still-forming candle. */
-function shape(raw: Candle[], timeframe: TimeframeId, limit: number): Candle[] {
-  const series = timeframe === "3m" ? aggregate(raw, "3m") : raw.map((c) => ({ ...c }));
-  const currentOpen = alignToCandle(Date.now(), timeframe);
-  for (const c of series) c.closed = c.time < currentOpen;
-  return series.slice(-limit);
-}
+    // Rate limit safeguard: Max 8 requests/min
+    if (!canMakeRequest()) {
+      if (cached) {
+        // Return stale cache gracefully instead of throwing 429 error
+        return cached.data;
+      }
+      throw new Error('Twelve Data HTTP 429: Rate limit reached (Max 8 calls/min). Please wait a few seconds.');
+    }
 
-/** Latest traded price, used to keep the forming candle moving between series pulls. */
-export async function fetchPrice(symbol: string): Promise<number | null> {
-  const hit = priceCache.get(symbol);
-  if (hit && Date.now() - hit.at < PRICE_TTL_MS) return hit.value;
-  try {
-    const json = (await request("/price", { symbol })) as { price?: string };
-    const price = Number(json.price);
-    if (!Number.isFinite(price)) return null;
-    priceCache.set(symbol, { at: Date.now(), value: price });
-    return price;
-  } catch {
-    return null;
+    // Track API call
+    trackRequest();
+
+    const formattedSymbol = symbol.includes('/') ? symbol : `${symbol.slice(0, 3)}/${symbol.slice(3)}`;
+    const url = `https://api.twelvedata.com/time_series?symbol=${formattedSymbol}&interval=${interval}&outputsize=${outputsize}&apikey=${this.apiKey}`;
+
+    const response = await fetch(url);
+    if (!response.ok) {
+      if (response.status === 429) {
+        throw new Error('Twelve Data HTTP 429');
+      }
+      if (response.status === 401) {
+        throw new Error('Twelve Data HTTP 401');
+      }
+      throw new Error(`Twelve Data Error: ${response.statusText}`);
+    }
+
+    const data = await response.json();
+
+    if (data.status === 'error') {
+      throw new Error(data.message || 'Failed to fetch Twelve Data');
+    }
+
+    if (!data.values || !Array.isArray(data.values)) {
+      throw new Error('Invalid candle data format received from Twelve Data');
+    }
+
+    const candles: Candle[] = data.values.map((v: any) => ({
+      timestamp: new Date(v.datetime).getTime(),
+      open: parseFloat(v.open),
+      high: parseFloat(v.high),
+      low: parseFloat(v.low),
+      close: parseFloat(v.close),
+      volume: parseFloat(v.volume || '0')
+    })).reverse();
+
+    // Save to Cache
+    cache.set(cacheKey, { timestamp: now, data: candles });
+
+    return candles;
   }
-}
 
-function round(v: number, digits: number): number {
-  const f = 10 ** digits;
-  return Math.round(v * f) / f;
+  async getMarketStatus(): Promise<MarketStatus> {
+    return {
+      isOpen: true,
+      mode: 'Real market'
+    };
+  }
 }
