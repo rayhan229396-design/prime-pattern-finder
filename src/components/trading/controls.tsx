@@ -127,36 +127,43 @@ export function TimeframeSelector({
   );
 }
 
+export interface BrokerOption {
+  id: string;
+  name: string;
+  /** True only when an authorized feed for this broker is connected. */
+  available: boolean;
+}
+
 export function BrokerSelector({
-  brokers,
+  options,
   value,
   onChange,
 }: {
-  brokers: BrokerAdapter[];
+  options: BrokerOption[];
   value: string | null;
   onChange: (id: string) => void;
 }) {
-  if (brokers.length === 0) {
-    return (
-      <div className="inline-flex items-center gap-2 rounded-md border border-dashed border-border bg-elevated px-3 py-2 text-xs text-muted-foreground">
-        <span className="label-xs">OTC Broker</span>
-        <span className="flex items-center gap-1">
-          No verified broker integrations <ChevronDown className="size-3 opacity-50" />
-        </span>
-      </div>
-    );
-  }
+  const anyAvailable = options.some((o) => o.available);
   return (
     <Select {...(value ? { value } : {})} onValueChange={onChange}>
-      <SelectTrigger className="w-[190px] bg-elevated text-sm">
-        <SelectValue placeholder="Select Broker" />
+      <SelectTrigger
+        className={cn(
+          "w-[210px] bg-elevated text-sm",
+          !anyAvailable && "border-dashed text-muted-foreground",
+        )}
+      >
+        <SelectValue placeholder="OTC broker" />
       </SelectTrigger>
       <SelectContent>
-        {brokers.map((b) => (
-          <SelectItem key={b.brokerId} value={b.brokerId}>
-            {b.name}
-          </SelectItem>
-        ))}
+        <SelectGroup>
+          <SelectLabel>OTC broker feed</SelectLabel>
+          {options.map((o) => (
+            <SelectItem key={o.id} value={o.id} disabled={!o.available}>
+              {o.name}
+              {o.available ? "" : " — no authorized feed"}
+            </SelectItem>
+          ))}
+        </SelectGroup>
       </SelectContent>
     </Select>
   );
