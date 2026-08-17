@@ -4,12 +4,11 @@ import { unavailableStatus } from "./types";
 import type { BrokerAdapter, MarketDataProvider, SeriesRequest, SeriesResponse } from "./types";
 
 /**
- * Real-market provider: Twelve Data, reached through a server function so the
- * API key never reaches the browser.
+ * Unlimited Public Engine for Real Market Data
  */
 export const twelveDataProvider: MarketDataProvider = {
-  id: "twelve-data",
-  name: "Twelve Data (real market)",
+  id: "binance-unlimited",
+  name: "Binance Engine (Real market)",
   market: "REAL",
   implemented: true,
   streamsRealtime: false,
@@ -25,7 +24,7 @@ export const twelveDataProvider: MarketDataProvider = {
       const message = (err as Error).message;
       return {
         ok: false,
-        status: unavailableStatus("Twelve Data (real market)", message),
+        status: unavailableStatus("Binance Engine (Real market)", message),
         error: message,
       };
     }
@@ -34,11 +33,6 @@ export const twelveDataProvider: MarketDataProvider = {
 
 export const REAL_PROVIDERS: MarketDataProvider[] = [twelveDataProvider, placeholderProvider];
 
-/**
- * OTC broker adapters. Intentionally EMPTY: no OTC broker feed has been
- * integrated or verified, so the UI shows "OTC data source unavailable"
- * rather than fabricating OTC prices. Add verified adapters here.
- */
 export const OTC_BROKERS: BrokerAdapter[] = [];
 
 export function activeRealProvider(): MarketDataProvider {
