@@ -1,5 +1,3 @@
-import { ChevronDown } from "lucide-react";
-
 import {
   Select,
   SelectContent,
@@ -11,7 +9,6 @@ import {
 } from "@/components/ui/select";
 import { ASSETS, TIMEFRAMES } from "@/lib/trading/instruments";
 import { cn } from "@/lib/utils";
-import type { BrokerAdapter } from "@/lib/trading/providers/types";
 import type { MarketType, TimeframeId } from "@/lib/trading/types";
 
 export function MarketSelector({
