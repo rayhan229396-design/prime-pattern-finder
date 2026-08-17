@@ -1,6 +1,6 @@
-import { MarketDataProvider, Candle, MarketStatus } from '../types';
+import { createServerFn } from "@tanstack/start";
+import type { Candle, SeriesRequest, SeriesResponse } from "./types";
 
-// Symbol mapper to map Forex/Crypto to Binance Pairs
 const BINANCE_SYMBOL_MAP: Record<string, string> = {
   'EUR/USD': 'EURUSDT',
   'GBP/USD': 'GBPUSDT',
@@ -12,62 +12,63 @@ const BINANCE_SYMBOL_MAP: Record<string, string> = {
   'ETHUSD': 'ETHUSDT'
 };
 
-// Interval mapper to map app intervals to Binance intervals
 const BINANCE_INTERVAL_MAP: Record<string, string> = {
-  '1min': '1m',
-  '5min': '5m',
-  '15min': '15m',
-  '30min': '30m',
-  '1h': '1h',
   '1m': '1m',
   '5m': '5m',
   '15m': '15m',
-  '30m': '30m'
+  '30m': '30m',
+  '1h': '1h',
+  '1min': '1m',
+  '5min': '5m',
+  '15min': '15m',
+  '30min': '30m'
 };
 
-export class TwelveDataServerProvider implements MarketDataProvider {
-  constructor(apiKey?: string) {
-    // No API key required for Binance Public Engine!
-  }
-
-  async getCandles(symbol: string, interval: string, outputsize: number = 30): Promise<Candle[]> {
-    const cleanSymbol = symbol.replace('/', '').toUpperCase();
-    const binanceSymbol = BINANCE_SYMBOL_MAP[symbol] || BINANCE_SYMBOL_MAP[cleanSymbol] || `${cleanSymbol}USDT`;
-    const binanceInterval = BINANCE_INTERVAL_MAP[interval] || '5m';
-
-    // Free Unlimited Binance Klines (Candlestick) Public API
-    const url = `https://api.binance.com/api/v3/klines?symbol=${binanceSymbol}&interval=${binanceInterval}&limit=${outputsize}`;
-
+export const getMarketSeries = createServerFn({ method: "POST" })
+  .validator((d: SeriesRequest) => d)
+  .handler(async ({ data }): Promise<SeriesResponse> => {
     try {
+      const symbol = data.symbol || 'EUR/USD';
+      const timeframe = data.timeframe || '5m';
+      const limit = data.limit || 30;
+
+      const cleanSymbol = symbol.replace('/', '').toUpperCase();
+      const binanceSymbol = BINANCE_SYMBOL_MAP[symbol] || BINANCE_SYMBOL_MAP[cleanSymbol] || `${cleanSymbol}USDT`;
+      const binanceInterval = BINANCE_INTERVAL_MAP[timeframe] || '5m';
+
+      const url = `https://api.binance.com/api/v3/klines?symbol=${binanceSymbol}&interval=${binanceInterval}&limit=${limit}`;
+
       const response = await fetch(url);
 
       if (!response.ok) {
-        throw new Error(`Binance API Error Status: ${response.status}`);
+        return {
+          ok: false,
+          status: { provider: "Binance Engine", message: `Binance Error ${response.status}` },
+          error: `Binance API Error: ${response.statusText}`
+        };
       }
 
-      const data = await response.json();
+      const rawData = await response.json();
 
-      // Format Binance Kline Array into Application Candle Interface
-      const candles: Candle[] = data.map((item: any) => ({
-        timestamp: item[0],             // Open time
-        open: parseFloat(item[1]),      // Open price
-        high: parseFloat(item[2]),      // High price
-        low: parseFloat(item[3]),       // Low price
-        close: parseFloat(item[4]),     // Close price
-        volume: parseFloat(item[5])     // Volume
+      const candles: Candle[] = rawData.map((item: any) => ({
+        timestamp: item[0],
+        open: parseFloat(item[1]),
+        high: parseFloat(item[2]),
+        low: parseFloat(item[3]),
+        close: parseFloat(item[4]),
+        volume: parseFloat(item[5])
       }));
 
-      return candles;
-    } catch (error: any) {
-      console.error('Binance Data Fetch Error:', error);
-      throw new Error(`Market Data Fetch Failed: ${error.message}`);
+      return {
+        ok: true,
+        candles,
+        status: { provider: "Binance Engine", message: "Live Market Data" }
+      };
+    } catch (err: any) {
+      return {
+        ok: false,
+        status: { provider: "Binance Engine", message: "Connection Error" },
+        error: err.message || "Failed to fetch market data"
+      };
     }
-  }
-
-  async getMarketStatus(): Promise<MarketStatus> {
-    return {
-      isOpen: true,
-      mode: 'Real market (Unlimited Binance Feed)'
-    };
-  }
-}
+  });
