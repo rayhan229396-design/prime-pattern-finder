@@ -1,4 +1,4 @@
-import { SeriesRequest, SeriesResponse, Candle } from "./types";
+import { SeriesRequest, Candle } from "./types";
 
 const BINANCE_SYMBOL_MAP: Record<string, string> = {
   'EUR/USD': 'EURUSDT',
@@ -25,9 +25,9 @@ const BINANCE_INTERVAL_MAP: Record<string, string> = {
 
 export async function getMarketSeries(req: { data: SeriesRequest }): Promise<{ ok: boolean; status: any; candles?: Candle[]; error?: string }> {
   try {
-    const symbol = req.data.symbol || 'EUR/USD';
-    const timeframe = req.data.timeframe || '5m';
-    const limit = req.data.limit || 30;
+    const symbol = req.data?.symbol || 'EUR/USD';
+    const timeframe = req.data?.timeframe || '5m';
+    const limit = req.data?.limit || 30;
 
     const cleanSymbol = symbol.replace('/', '').toUpperCase();
     const binanceSymbol = BINANCE_SYMBOL_MAP[symbol] || BINANCE_SYMBOL_MAP[cleanSymbol] || `${cleanSymbol}USDT`;
@@ -40,7 +40,7 @@ export async function getMarketSeries(req: { data: SeriesRequest }): Promise<{ o
     if (!response.ok) {
       return {
         ok: false,
-        status: { provider: "Binance Public Engine", message: `Status ${response.status}` },
+        status: { provider: "Binance Engine", message: `Status ${response.status}` },
         error: `Binance Error: ${response.statusText}`
       };
     }
@@ -58,7 +58,7 @@ export async function getMarketSeries(req: { data: SeriesRequest }): Promise<{ o
 
     return {
       ok: true,
-      status: { provider: "Binance Engine", message: "Data received" },
+      status: { provider: "Binance Engine (Real market)", message: "Data received" },
       candles: candles
     };
   } catch (err: any) {
