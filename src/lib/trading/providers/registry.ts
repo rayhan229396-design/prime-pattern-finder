@@ -19,11 +19,7 @@ const BINANCE_INTERVAL_MAP: Record<string, string> = {
   '5m': '5m',
   '15m': '15m',
   '30m': '30m',
-  '1h': '1h',
-  '1min': '1m',
-  '5min': '5m',
-  '15min': '15m',
-  '30min': '30m'
+  '1h': '1h'
 };
 
 /**
@@ -43,7 +39,7 @@ export const twelveDataProvider: MarketDataProvider = {
       const limit = req.limit || 30;
 
       const cleanSymbol = symbol.replace('/', '').toUpperCase();
-      const binanceSymbol = BINANCE_SYMBOL_MAP[symbol] || BINANCE_SYMBOL_MAP[cleanSymbol] || `${cleanSymbol}USDT`;
+      const binanceSymbol = BINANCE_SYMBOL_MAP[cleanSymbol] || `${cleanSymbol}USDT`;
       const binanceInterval = BINANCE_INTERVAL_MAP[timeframe] || '5m';
 
       // Direct client-side fetch (bypass server functions)
@@ -72,7 +68,11 @@ export const twelveDataProvider: MarketDataProvider = {
       return {
         ok: true,
         candles,
-        status: { provider: "Binance Public Feed", message: "Live Market Active" }
+        status: {
+          provider: "Binance Public Feed",
+          code: "OK",
+          message: "Live Market Active"
+        }
       };
     } catch (err: any) {
       return {
@@ -81,21 +81,5 @@ export const twelveDataProvider: MarketDataProvider = {
         error: err.message || "Binance connection error"
       };
     }
-  },
+  }
 };
-
-export const REAL_PROVIDERS: MarketDataProvider[] = [twelveDataProvider, placeholderProvider];
-
-export const OTC_BROKERS: BrokerAdapter[] = [];
-
-export function activeRealProvider(): MarketDataProvider {
-  return REAL_PROVIDERS.find((p) => p.implemented) ?? placeholderProvider;
-}
-
-export function hasVerifiedRealData(): boolean {
-  return REAL_PROVIDERS.some((p) => p.implemented);
-}
-
-export function hasVerifiedOtcData(): boolean {
-  return OTC_BROKERS.some((b) => b.implemented);
-}
