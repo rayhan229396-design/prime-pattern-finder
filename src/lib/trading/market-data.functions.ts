@@ -1,71 +1,71 @@
-import { createServerFn } from "@tanstack/react-start";
+import { SeriesRequest, SeriesResponse, Candle } from "./types";
 
-import type { Candle, DataSourceStatus, TimeframeId } from "./types";
+const BINANCE_SYMBOL_MAP: Record<string, string> = {
+  'EUR/USD': 'EURUSDT',
+  'GBP/USD': 'GBPUSDT',
+  'BTC/USD': 'BTCUSDT',
+  'ETH/USD': 'ETHUSDT',
+  'EURUSD': 'EURUSDT',
+  'GBPUSD': 'GBPUSDT',
+  'BTCUSD': 'BTCUSDT',
+  'ETHUSD': 'ETHUSDT'
+};
 
-/** Client-callable market data RPC. The provider key stays on the server. */
+const BINANCE_INTERVAL_MAP: Record<string, string> = {
+  '1m': '1m',
+  '5m': '5m',
+  '15m': '15m',
+  '30m': '30m',
+  '1h': '1h',
+  '1min': '1m',
+  '5min': '5m',
+  '15min': '15m',
+  '30min': '30m'
+};
 
-export interface SeriesResult {
-  ok: boolean;
-  candles: Candle[];
-  status: DataSourceStatus;
-  error?: string;
-}
+export async function getMarketSeries(req: { data: SeriesRequest }): Promise<{ ok: boolean; status: any; candles?: Candle[]; error?: string }> {
+  try {
+    const symbol = req.data.symbol || 'EUR/USD';
+    const timeframe = req.data.timeframe || '5m';
+    const limit = req.data.limit || 30;
 
-const TIMEFRAMES = new Set<string>(["1m", "3m", "5m"]);
+    const cleanSymbol = symbol.replace('/', '').toUpperCase();
+    const binanceSymbol = BINANCE_SYMBOL_MAP[symbol] || BINANCE_SYMBOL_MAP[cleanSymbol] || `${cleanSymbol}USDT`;
+    const binanceInterval = BINANCE_INTERVAL_MAP[timeframe] || '5m';
 
-export const getMarketSeries = createServerFn({ method: "GET" })
-  .inputValidator((input: { symbol: string; timeframe: TimeframeId; limit?: number }) => {
-    if (typeof input?.symbol !== "string" || !/^[A-Z]{3}\/[A-Z]{3}$/.test(input.symbol)) {
-      throw new Error("Invalid symbol");
-    }
-    if (!TIMEFRAMES.has(input.timeframe)) throw new Error("Invalid timeframe");
-    const limit = Math.min(Math.max(Number(input.limit ?? 320), 50), 500);
-    return { symbol: input.symbol, timeframe: input.timeframe, limit };
-  })
-  .handler(async ({ data }): Promise<SeriesResult> => {
-    const { fetchSeries } = await import("./providers/twelve-data.server");
-    const name = "Twelve Data (real market)";
-    try {
-      const { candles, cached } = await fetchSeries(data.symbol, data.timeframe, data.limit);
-      const last = candles[candles.length - 1];
-      return {
-        ok: true,
-        candles,
-        status: {
-          name,
-          connected: true,
-          quality: cached ? "delayed" : "live",
-          lastUpdate: last ? Date.now() : null,
-          transport: "rest",
-          ...(cached ? { message: "Served from short-lived cache to respect provider rate limits." } : {}),
-        },
-      };
-    } catch (err) {
-      const message = (err as Error).message;
+    const url = `https://api.binance.com/api/v3/klines?symbol=${binanceSymbol}&interval=${binanceInterval}&limit=${limit}`;
+
+    const response = await fetch(url);
+
+    if (!response.ok) {
       return {
         ok: false,
-        candles: [],
-        status: {
-          name,
-          connected: false,
-          quality: "unavailable",
-          lastUpdate: null,
-          transport: "rest",
-          message,
-        },
-        error: message,
+        status: { provider: "Binance Public Engine", message: `Status ${response.status}` },
+        error: `Binance Error: ${response.statusText}`
       };
     }
-  });
 
-export const getMarketPrice = createServerFn({ method: "GET" })
-  .inputValidator((input: { symbol: string }) => {
-    if (typeof input?.symbol !== "string" || !/^[A-Z]{3}\/[A-Z]{3}$/.test(input.symbol)) {
-      throw new Error("Invalid symbol");
-    }
-    return { symbol: input.symbol };
-  })
-  .handler(async ({ data }): Promise<{ price: number | null }> => {
-    const { fetchPrice } = await import("./providers/twelve-data.server");
-    return { price: await fetchPrice(data.symbol) };
-  });
+    const data = await response.json();
+
+    const candles: Candle[] = data.map((item: any) => ({
+      timestamp: item[0],
+      open: parseFloat(item[1]),
+      high: parseFloat(item[2]),
+      low: parseFloat(item[3]),
+      close: parseFloat(item[4]),
+      volume: parseFloat(item[5])
+    }));
+
+    return {
+      ok: true,
+      status: { provider: "Binance Engine", message: "Data received" },
+      candles: candles
+    };
+  } catch (err: any) {
+    return {
+      ok: false,
+      status: { provider: "Binance Engine", message: "Fetch failed" },
+      error: err.message || "Failed to fetch market data"
+    };
+  }
+}
