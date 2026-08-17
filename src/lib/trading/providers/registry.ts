@@ -3,11 +3,8 @@ import { placeholderProvider } from "./placeholder-provider";
 import { unavailableStatus } from "./types";
 import type { BrokerAdapter, MarketDataProvider, SeriesRequest, SeriesResponse } from "./types";
 
-/**
- * Unlimited Public Engine for Real Market Data
- */
 export const twelveDataProvider: MarketDataProvider = {
-  id: "binance-unlimited",
+  id: "twelve-data",
   name: "Binance Engine (Real market)",
   market: "REAL",
   implemented: true,
