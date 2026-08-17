@@ -49,10 +49,32 @@ export function MarketSelector({
 export function AssetDropdown({
   value,
   onChange,
+  symbols,
 }: {
   value: string;
   onChange: (s: string) => void;
+  /** When provided (e.g. assets discovered from the OTC feed), overrides the registry. */
+  symbols?: string[];
 }) {
+  if (symbols) {
+    return (
+      <Select value={value} onValueChange={onChange}>
+        <SelectTrigger className="w-[150px] bg-elevated tabular text-sm">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent className="max-h-[340px]">
+          <SelectGroup>
+            <SelectLabel>OTC assets</SelectLabel>
+            {symbols.map((s) => (
+              <SelectItem key={s} value={s} className="tabular">
+                {s} OTC
+              </SelectItem>
+            ))}
+          </SelectGroup>
+        </SelectContent>
+      </Select>
+    );
+  }
   const forex = ASSETS.filter((a) => a.assetClass === "forex");
   const metals = ASSETS.filter((a) => a.assetClass === "metal");
   return (
